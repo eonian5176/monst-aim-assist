@@ -1,0 +1,5 @@
+env/
+__pycache__/
+imgs/
+debug.py
+logs.txt
