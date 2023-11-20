@@ -1,12 +1,13 @@
 import os
 import math
+import logging
+from typing import Optional
 
 import json
 
 import numpy as np
 import cv2
 
-import logging
 
 logging.basicConfig(level = logging.INFO, filename = "logs.txt", filemode = "a")
 
@@ -26,17 +27,17 @@ def find_border(img_path: str, scale: int) -> dict[str, tuple[int, int]]:
             img = old_img.copy()
             coordinates[edge] = (x, y)
             cv2.circle(img, (x, y), 5, (255, 0, 0), -1)  # Draw dot where user clicked
-            cv2.imshow(f"{edge}", img)
+            cv2.imshow(edge, img)
             logger.info(f"Selected coordinate: ({x},{y})")
 
     for edge in ["L", "U", "R", "D"]:
         img = cv2.imread(os.path.join(img_path, f"{edge}.jpg"))
 
         #print(img.shape)
-        #samsung s21 has 2340x1080, gcd of 180. scaled down by 3x
+        #samsung s21 has 2340x1080
         scaled_sz = (int(img.shape[1] * scale), int(img.shape[0] * scale))
         img = cv2.resize(img, scaled_sz, interpolation = cv2.INTER_LINEAR)
-        cv2.imshow(f"{edge}", img)
+        cv2.imshow(edge, img)
         
         # Set mouse callback function for window
         cv2.setMouseCallback(edge, click_event, (edge, img))
@@ -115,8 +116,55 @@ def view_img_with_border(img_path: str, coords: dict[str, int], scale: int) -> N
     cv2.destroyAllWindows()
 
 
+def get_starting_position(img_path: str, scale: float) -> tuple[int, int]:
+    coordinates = []
 
-def calculate_trajectory(start_pos: tuple[int, int], shot_angle: int, border: dict[str, int], reflect_limit: int = 10) -> list[tuple[int, int]]:
+    def click_event(event, x: int, y: int, flags: int, param: np.ndarray) -> None:
+        old_img = param
+        if event == cv2.EVENT_LBUTTONDOWN:
+            img = old_img.copy()
+            coordinates.append((x, y))
+            cv2.circle(img, (x, y), 5, (255, 0, 0), -1)  # Draw dot where user clicked
+            cv2.imshow("click to set starting position", img)
+            logger.info(f"Selected start coordinate: ({x},{y})")
+
+    img = cv2.imread(img_path)
+    scaled_sz = (int(img.shape[1] * scale), int(img.shape[0] * scale))
+    img = cv2.resize(img, scaled_sz, interpolation = cv2.INTER_LINEAR)
+
+    cv2.imshow("click to set starting position", img)
+
+    cv2.setMouseCallback("click to set starting position", click_event, img)
+
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+    if not coordinates:
+        raise ValueError("No position set before window closed")
+    
+    return (coordinates[-1][0]/scale, coordinates[-1][1]/scale)
+
+
+
+def pre_adjust_start(pos: tuple[int, int], border: dict[str, int]) -> tuple[int, int]:
+    new_x, new_y = pos
+
+    if new_x < border['L']:
+        new_x = border['L']
+    
+    if new_x > border['R']:
+        new_x = border['R']
+
+    if new_y < border['U']:
+        new_x = border['U']
+    
+    if new_y > border['D']:
+        new_y = border['D']
+
+    return (new_x, new_y)
+
+
+def calculate_trajectory(start_pos: tuple[int, int], shot_angle: int, border: dict[str, int], reflect_limit: int = 20) -> list[tuple[int, int]]:
     """
     start_x, start_y: starting position for current unit
     shot_angle: angle of shot in degrees (0-359), 0 referencing --> direction
@@ -125,12 +173,14 @@ def calculate_trajectory(start_pos: tuple[int, int], shot_angle: int, border: di
     """
 
     #preset values
+    start_pos = pre_adjust_start(start_pos, border)
     x, y = start_pos
-    angle = shot_angle * math.pi/180
+    
+    angle = (360-shot_angle) * math.pi/180
     step = 0.1 #step size to take in given direction in pixel
 
     #calculate process
-    points: list[tuple[int, int]] = [start_pos]
+    points: list[tuple[int, int]] = [(round(start_pos[0]), round(start_pos[1]))]
 
     while len(points) <= reflect_limit+1:
         # Calculate next position based on current_angle
@@ -196,3 +246,34 @@ def get_reflected_angle(angle: float, border_hit: str):
     if border_hit == "2":
         return angle + math.pi
     
+
+def draw_trajectories(image: np.ndarray, trajectories: list[tuple[int, int]], border: dict[str, int], scale: float, limit: int = 10) -> np.ndarray:
+    """
+    returns copy of image with trajectories and border
+    """
+    img_copy = draw_border(image, border, (0, 0, 0))
+
+    for i in range(min(limit, len(trajectories)-1)):
+        cv2.line(img_copy, trajectories[i], trajectories[i+1], color= (255, 30*i, 255), thickness=7)
+
+    return img_copy
+
+
+def view_img_with_trajectories(img_path: str, trajectories: list[tuple[int, int]], border: dict[str, int], scale: float) -> None:
+    """
+    returns image of monst gameplay with trajectories
+    img_path: img of monst gameplay
+    trajectories: trajectories calculated given starting pos and angle
+    border: border of monst gameplay, which should already be found
+    scale: scale to expand image for better view on PC
+    """
+    img = cv2.imread(img_path)
+
+    img = draw_trajectories(img, trajectories, border, scale)
+
+    scaled_sz = (int(img.shape[1] * scale), int(img.shape[0] * scale))
+    img = cv2.resize(img, scaled_sz, interpolation = cv2.INTER_LINEAR)
+
+    cv2.imshow("paths", img)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
